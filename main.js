@@ -560,35 +560,33 @@ var ViewPlusPlugin = class extends import_obsidian3.Plugin {
     if (signal.aborted) return;
     const regularDirs = [];
     const symlinkDirs = [];
-    await Promise.all(
-      entries.map(async (entry) => {
-        if (signal.aborted) return;
-        const childRelPath = relPath ? `${relPath}/${entry.name}` : entry.name;
-        let isDir = entry.isDirectory();
-        const isSymlink = entry.isSymbolicLink();
+    await runBounded(entries, DISCOVERY_CONCURRENCY, async (entry) => {
+      if (signal.aborted) return;
+      const childRelPath = relPath ? `${relPath}/${entry.name}` : entry.name;
+      let isDir = entry.isDirectory();
+      const isSymlink = entry.isSymbolicLink();
+      if (isSymlink) {
+        try {
+          isDir = (await (0, import_promises.stat)((0, import_path2.join)(basePath, childRelPath))).isDirectory();
+        } catch (e) {
+          return;
+        }
+      }
+      if (isExcluded(childRelPath, this.settings.excludePatterns)) return;
+      if (inSymlinkedTree || isSymlink || entry.name.startsWith(".")) {
+        try {
+          await adapter.reconcileFile(childRelPath, isDir);
+        } catch (e) {
+        }
+      }
+      if (isDir) {
         if (isSymlink) {
-          try {
-            isDir = (await (0, import_promises.stat)((0, import_path2.join)(basePath, childRelPath))).isDirectory();
-          } catch (e) {
-            return;
-          }
+          symlinkDirs.push(childRelPath);
+        } else {
+          regularDirs.push(childRelPath);
         }
-        if (isExcluded(childRelPath, this.settings.excludePatterns)) return;
-        if (inSymlinkedTree || isSymlink || entry.name.startsWith(".")) {
-          try {
-            await adapter.reconcileFile(childRelPath, isDir);
-          } catch (e) {
-          }
-        }
-        if (isDir) {
-          if (isSymlink) {
-            symlinkDirs.push(childRelPath);
-          } else {
-            regularDirs.push(childRelPath);
-          }
-        }
-      })
-    );
+      }
+    });
     for (const dir of regularDirs) {
       if (signal.aborted) return;
       await this.discoverHiddenFiles(dir, signal, depth, inSymlinkedTree);
@@ -618,6 +616,19 @@ var ViewPlusPlugin = class extends import_obsidian3.Plugin {
     await this.saveData(this.settings);
   }
 };
+var DISCOVERY_CONCURRENCY = 20;
+async function runBounded(items, limit, fn) {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const item = items[next++];
+      await fn(item);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, worker)
+  );
+}
 function isDotName(normalizedPath) {
   const segments = normalizedPath.split("/");
   const name = segments[segments.length - 1];

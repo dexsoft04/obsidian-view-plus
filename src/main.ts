@@ -192,46 +192,46 @@ export default class ViewPlusPlugin extends Plugin {
 		const regularDirs: string[] = [];
 		const symlinkDirs: string[] = [];
 
-		await Promise.all(
-			entries.map(async (entry) => {
-				if (signal.aborted) return;
+		// Process entries with bounded concurrency to avoid overwhelming the vault
+		// index with thousands of simultaneous reconcileFile / stat calls.
+		await runBounded(entries, DISCOVERY_CONCURRENCY, async (entry) => {
+			if (signal.aborted) return;
 
-				const childRelPath = relPath ? `${relPath}/${entry.name}` : entry.name;
-				let isDir = entry.isDirectory();
-				const isSymlink = entry.isSymbolicLink();
+			const childRelPath = relPath ? `${relPath}/${entry.name}` : entry.name;
+			let isDir = entry.isDirectory();
+			const isSymlink = entry.isSymbolicLink();
 
+			if (isSymlink) {
+				// Resolve the symlink to find out if it points to a directory.
+				try {
+					isDir = (await stat(join(basePath, childRelPath))).isDirectory();
+				} catch {
+					return; // dangling symlink, skip
+				}
+			}
+
+			if (isExcluded(childRelPath, this.settings.excludePatterns)) return;
+
+			// Register when:
+			//   - inside a symlinked subtree (Obsidian never scanned it), or
+			//   - the entry itself is a symlink (Obsidian skips symlinks), or
+			//   - the name starts with "." (hidden file/folder)
+			if (inSymlinkedTree || isSymlink || entry.name.startsWith(".")) {
+				try {
+					await adapter.reconcileFile(childRelPath, isDir);
+				} catch {
+					// skip files Obsidian cannot register
+				}
+			}
+
+			if (isDir) {
 				if (isSymlink) {
-					// Resolve the symlink to find out if it points to a directory.
-					try {
-						isDir = (await stat(join(basePath, childRelPath))).isDirectory();
-					} catch {
-						return; // dangling symlink, skip
-					}
+					symlinkDirs.push(childRelPath);
+				} else {
+					regularDirs.push(childRelPath);
 				}
-
-				if (isExcluded(childRelPath, this.settings.excludePatterns)) return;
-
-				// Register when:
-				//   - inside a symlinked subtree (Obsidian never scanned it), or
-				//   - the entry itself is a symlink (Obsidian skips symlinks), or
-				//   - the name starts with "." (hidden file/folder)
-				if (inSymlinkedTree || isSymlink || entry.name.startsWith(".")) {
-					try {
-						await adapter.reconcileFile(childRelPath, isDir);
-					} catch {
-						// skip files Obsidian cannot register
-					}
-				}
-
-				if (isDir) {
-					if (isSymlink) {
-						symlinkDirs.push(childRelPath);
-					} else {
-						regularDirs.push(childRelPath);
-					}
-				}
-			})
-		);
+			}
+		});
 
 		// Regular subdirs: recurse at same depth, propagate inSymlinkedTree flag.
 		for (const dir of regularDirs) {
@@ -270,6 +270,29 @@ export default class ViewPlusPlugin extends Plugin {
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
 	}
+}
+
+// Maximum number of entries processed concurrently during hidden-file discovery.
+// Keeps stat() + reconcileFile() I/O at a predictable rate for large vaults.
+const DISCOVERY_CONCURRENCY = 20;
+
+// Run fn over every item in items, with at most `limit` concurrent calls at once.
+// Workers pull from a shared index so the queue drains naturally.
+async function runBounded<T>(
+	items: T[],
+	limit: number,
+	fn: (item: T) => Promise<void>
+): Promise<void> {
+	let next = 0;
+	const worker = async (): Promise<void> => {
+		while (next < items.length) {
+			const item = items[next++];
+			await fn(item);
+		}
+	};
+	await Promise.all(
+		Array.from({ length: Math.min(limit, items.length) }, worker)
+	);
 }
 
 // Check if the last segment (filename) starts with "."
