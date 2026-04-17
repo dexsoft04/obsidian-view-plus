@@ -101,7 +101,7 @@ export class FileViewerView extends TextFileView {
 		if (content.length > MAX_FILE_SIZE) {
 			this.contentEl.createEl("p", {
 				cls: "view-plus-too-large",
-				text: `File too large to preview (${Math.round(content.length / 1024)} KB).`,
+				text: `File too large to preview (${Math.round(content.length / 1024)} KB). Use the "Open with system app" button above.`,
 			});
 			return;
 		}
@@ -230,8 +230,7 @@ function renderCsvTable(
 		return;
 	}
 
-	const displayRows = truncated ? rows.slice(0, MAX_TABLE_ROWS + 1) : rows;
-	const colCount = Math.max(...displayRows.map((r) => r.length));
+	const colCount = Math.max(...rows.map((r) => r.length));
 
 	const outer = containerEl.createDiv({ cls: "view-plus-csv-container" });
 	const wrap = outer.createDiv({ cls: "view-plus-table-wrap" });
@@ -240,11 +239,11 @@ function renderCsvTable(
 	const thead = table.createEl("thead");
 	const headerRow = thead.createEl("tr");
 	for (let i = 0; i < colCount; i++) {
-		headerRow.createEl("th", { text: displayRows[0][i] ?? "" });
+		headerRow.createEl("th", { text: rows[0][i] ?? "" });
 	}
 
 	const tbody = table.createEl("tbody");
-	for (const row of displayRows.slice(1)) {
+	for (const row of rows.slice(1)) {
 		const tr = tbody.createEl("tr");
 		for (let i = 0; i < colCount; i++) {
 			tr.createEl("td", { text: row[i] ?? "" });

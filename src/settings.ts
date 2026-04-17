@@ -88,10 +88,8 @@ export class ViewPlusSettingTab extends PluginSettingTab {
 					.onChange((value) => {
 						clearTimeout(this.excludeDebounceTimer);
 						this.excludeDebounceTimer = setTimeout(async () => {
-							this.plugin.settings.excludePatterns = value
-								.split("\n")
-								.map((line) => line.trim())
-								.filter((line) => line.length > 0);
+							const lines = value.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+							this.plugin.settings.excludePatterns = [...new Set(lines)];
 							await this.plugin.saveSettings();
 						}, 300);
 					});

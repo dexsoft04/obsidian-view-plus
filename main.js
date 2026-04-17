@@ -81,7 +81,8 @@ var ViewPlusSettingTab = class extends import_obsidian.PluginSettingTab {
       text.setPlaceholder(".git/**\n!.git/config").setValue(this.plugin.settings.excludePatterns.join("\n")).onChange((value) => {
         clearTimeout(this.excludeDebounceTimer);
         this.excludeDebounceTimer = setTimeout(async () => {
-          this.plugin.settings.excludePatterns = value.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+          const lines = value.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+          this.plugin.settings.excludePatterns = [...new Set(lines)];
           await this.plugin.saveSettings();
         }, 300);
       });
@@ -175,7 +176,7 @@ var FileViewerView = class extends import_obsidian2.TextFileView {
     if (content.length > MAX_FILE_SIZE) {
       this.contentEl.createEl("p", {
         cls: "view-plus-too-large",
-        text: `File too large to preview (${Math.round(content.length / 1024)} KB).`
+        text: `File too large to preview (${Math.round(content.length / 1024)} KB). Use the "Open with system app" button above.`
       });
       return;
     }
@@ -282,18 +283,17 @@ function renderCsvTable(containerEl, content, delimiter) {
     });
     return;
   }
-  const displayRows = truncated ? rows.slice(0, MAX_TABLE_ROWS + 1) : rows;
-  const colCount = Math.max(...displayRows.map((r) => r.length));
+  const colCount = Math.max(...rows.map((r) => r.length));
   const outer = containerEl.createDiv({ cls: "view-plus-csv-container" });
   const wrap = outer.createDiv({ cls: "view-plus-table-wrap" });
   const table = wrap.createEl("table", { cls: "view-plus-table" });
   const thead = table.createEl("thead");
   const headerRow = thead.createEl("tr");
   for (let i = 0; i < colCount; i++) {
-    headerRow.createEl("th", { text: (_a = displayRows[0][i]) != null ? _a : "" });
+    headerRow.createEl("th", { text: (_a = rows[0][i]) != null ? _a : "" });
   }
   const tbody = table.createEl("tbody");
-  for (const row of displayRows.slice(1)) {
+  for (const row of rows.slice(1)) {
     const tr = tbody.createEl("tr");
     for (let i = 0; i < colCount; i++) {
       tr.createEl("td", { text: (_b = row[i]) != null ? _b : "" });
@@ -579,7 +579,7 @@ var ViewPlusPlugin = class extends import_obsidian3.Plugin {
     if (signal.aborted) return;
     const regularDirs = [];
     const symlinkDirs = [];
-    await runBounded(entries, DISCOVERY_CONCURRENCY, async (entry) => {
+    await runBounded(entries, DISCOVERY_CONCURRENCY, signal, async (entry) => {
       if (signal.aborted) return;
       const childRelPath = relPath ? `${relPath}/${entry.name}` : entry.name;
       let isDir = entry.isDirectory();
@@ -638,10 +638,10 @@ var ViewPlusPlugin = class extends import_obsidian3.Plugin {
   }
 };
 var DISCOVERY_CONCURRENCY = 20;
-async function runBounded(items, limit, fn) {
+async function runBounded(items, limit, signal, fn) {
   let next = 0;
   const worker = async () => {
-    while (next < items.length) {
+    while (next < items.length && !signal.aborted) {
       const item = items[next++];
       await fn(item);
     }
@@ -660,8 +660,7 @@ function safeRegisterExtensions(plugin, exts, viewType) {
   }
 }
 function isDotName(normalizedPath) {
-  const segments = normalizedPath.split("/");
-  const name = segments[segments.length - 1];
+  const name = normalizedPath.split("/").at(-1);
   return name.startsWith(".") && name !== "." && name !== "..";
 }
 function compilePatterns(rawPatterns) {

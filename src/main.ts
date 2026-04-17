@@ -201,7 +201,7 @@ export default class ViewPlusPlugin extends Plugin {
 
 		// Process entries with bounded concurrency to avoid overwhelming the vault
 		// index with thousands of simultaneous reconcileFile / stat calls.
-		await runBounded(entries, DISCOVERY_CONCURRENCY, async (entry) => {
+		await runBounded(entries, DISCOVERY_CONCURRENCY, signal, async (entry) => {
 			if (signal.aborted) return;
 
 			const childRelPath = relPath ? `${relPath}/${entry.name}` : entry.name;
@@ -290,11 +290,12 @@ const DISCOVERY_CONCURRENCY = 20;
 async function runBounded<T>(
 	items: T[],
 	limit: number,
+	signal: AbortSignal,
 	fn: (item: T) => Promise<void>
 ): Promise<void> {
 	let next = 0;
 	const worker = async (): Promise<void> => {
-		while (next < items.length) {
+		while (next < items.length && !signal.aborted) {
 			const item = items[next++];
 			await fn(item);
 		}
@@ -324,8 +325,7 @@ function safeRegisterExtensions(
 
 // Check if the last segment (filename) starts with "."
 function isDotName(normalizedPath: string): boolean {
-	const segments = normalizedPath.split("/");
-	const name = segments[segments.length - 1];
+	const name = normalizedPath.split("/").at(-1)!;
 	return name.startsWith(".") && name !== "." && name !== "..";
 }
 
