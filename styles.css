@@ -1,0 +1,122 @@
+.view-plus-viewer {
+	height: 100%;
+	overflow: auto;
+	padding: var(--size-4-4);
+}
+
+.view-plus-viewer pre {
+	margin: 0;
+}
+
+.view-plus-too-large {
+	padding: var(--size-4-4);
+	color: var(--text-muted);
+}
+
+/* ── CSV / TSV table ───────────────────────────────────────────────────────── */
+
+.view-plus-csv-container {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	overflow: hidden;
+}
+
+.view-plus-table-wrap {
+	overflow: auto;
+	flex: 1;
+	min-height: 0;
+	padding: var(--size-4-4);
+}
+
+.view-plus-table {
+	border-collapse: collapse;
+	width: 100%;
+	font-size: var(--font-smaller);
+}
+
+.view-plus-table th,
+.view-plus-table td {
+	border: 1px solid var(--background-modifier-border);
+	padding: var(--size-4-1) var(--size-4-2);
+	white-space: pre;
+	vertical-align: top;
+}
+
+.view-plus-table thead th {
+	background: var(--background-secondary);
+	font-weight: 600;
+	position: sticky;
+	top: 0;
+	z-index: 1;
+}
+
+.view-plus-table tbody tr:nth-child(even) {
+	background: var(--background-primary-alt);
+}
+
+.view-plus-table tbody tr:hover {
+	background: var(--background-modifier-hover);
+}
+
+.view-plus-table-truncated {
+	padding: var(--size-4-4);
+	color: var(--text-muted);
+	font-size: var(--font-smaller);
+}
+
+/* ── Media viewer ──────────────────────────────────────────────────────────── */
+
+.view-plus-media {
+	height: 100%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: var(--size-4-4);
+	overflow: auto;
+}
+
+.view-plus-media-image-wrap {
+	max-width: 100%;
+	max-height: 100%;
+	overflow: auto;
+}
+
+.view-plus-media-image {
+	max-width: 100%;
+	display: block;
+}
+
+.view-plus-media-audio-wrap {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: var(--size-4-4);
+}
+
+.view-plus-media-label {
+	color: var(--text-muted);
+	font-size: var(--font-smaller);
+}
+
+.view-plus-media-audio {
+	width: 400px;
+	max-width: 100%;
+}
+
+.view-plus-media-video-wrap {
+	max-width: 100%;
+	max-height: 100%;
+}
+
+.view-plus-media-video {
+	max-width: 100%;
+	max-height: 80vh;
+	display: block;
+}
+
+.view-plus-cannot-preview {
+	color: var(--text-muted);
+	text-align: center;
+	padding: var(--size-4-4);
+}

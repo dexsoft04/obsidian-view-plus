@@ -1,0 +1,9 @@
+{
+	"id": "obsidian-view-plus",
+	"name": "View Plus",
+	"version": "1.0.0",
+	"minAppVersion": "1.4.0",
+	"description": "Show hidden dotfiles/dotfolders and non-Markdown file types in the Obsidian file explorer.",
+	"author": "dexsoft",
+	"isDesktopOnly": true
+}

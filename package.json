@@ -1,0 +1,23 @@
+{
+	"name": "obsidian-view-plus",
+	"version": "1.0.0",
+	"description": "Show hidden dotfiles/dotfolders and non-Markdown file types in Obsidian",
+	"main": "main.js",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"deploy": "npm run build && cp main.js manifest.json styles.css /mnt/d/Users/asome/note-gen/.obsidian/plugins/obsidian-view-plus/",
+		"version": "node version-bump.mjs && git add manifest.json versions.json"
+	},
+	"keywords": [],
+	"author": "",
+	"license": "MIT",
+	"devDependencies": {
+		"@types/node": "^18.0.0",
+		"builtin-modules": "3.3.0",
+		"esbuild": "0.25.5",
+		"obsidian": "latest",
+		"tslib": "2.4.0",
+		"typescript": "^5.8.3"
+	}
+}
