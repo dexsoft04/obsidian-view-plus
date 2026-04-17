@@ -480,9 +480,9 @@ var ViewPlusPlugin = class extends import_obsidian3.Plugin {
     await this.loadSettings();
     this.addSettingTab(new ViewPlusSettingTab(this.app, this));
     this.registerView(FILE_VIEWER_VIEW_TYPE, (leaf) => new FileViewerView(leaf));
-    this.registerExtensions(TEXT_EXTENSIONS, FILE_VIEWER_VIEW_TYPE);
+    safeRegisterExtensions(this, TEXT_EXTENSIONS, FILE_VIEWER_VIEW_TYPE);
     this.registerView(MEDIA_VIEWER_VIEW_TYPE, (leaf) => new MediaView(leaf));
-    this.registerExtensions(MEDIA_EXTENSIONS, MEDIA_VIEWER_VIEW_TYPE);
+    safeRegisterExtensions(this, MEDIA_EXTENSIONS, MEDIA_VIEWER_VIEW_TYPE);
     this.registerEvent(
       this.app.workspace.on("file-menu", (menu, file) => {
         if (!(file instanceof import_obsidian3.TFile) || file.extension === "md") return;
@@ -649,6 +649,15 @@ async function runBounded(items, limit, fn) {
   await Promise.all(
     Array.from({ length: Math.min(limit, items.length) }, worker)
   );
+}
+function safeRegisterExtensions(plugin, exts, viewType) {
+  for (const ext of exts) {
+    try {
+      plugin.registerExtensions([ext], viewType);
+    } catch (e) {
+      console.warn(`View Plus: skipping extension "${ext}" \u2014 already registered`);
+    }
+  }
 }
 function isDotName(normalizedPath) {
   const segments = normalizedPath.split("/");

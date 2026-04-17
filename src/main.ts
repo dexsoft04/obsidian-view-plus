@@ -44,11 +44,11 @@ export default class ViewPlusPlugin extends Plugin {
 
 		// Register built-in file viewer for text/code files
 		this.registerView(FILE_VIEWER_VIEW_TYPE, (leaf) => new FileViewerView(leaf));
-		this.registerExtensions(TEXT_EXTENSIONS, FILE_VIEWER_VIEW_TYPE);
+		safeRegisterExtensions(this, TEXT_EXTENSIONS, FILE_VIEWER_VIEW_TYPE);
 
 		// Register media viewer for image/audio/video formats not handled by Obsidian natively
 		this.registerView(MEDIA_VIEWER_VIEW_TYPE, (leaf) => new MediaView(leaf));
-		this.registerExtensions(MEDIA_EXTENSIONS, MEDIA_VIEWER_VIEW_TYPE);
+		safeRegisterExtensions(this, MEDIA_EXTENSIONS, MEDIA_VIEWER_VIEW_TYPE);
 
 		// Right-click menu: add "Open with system app" for all non-Markdown files
 		this.registerEvent(
@@ -302,6 +302,24 @@ async function runBounded<T>(
 	await Promise.all(
 		Array.from({ length: Math.min(limit, items.length) }, worker)
 	);
+}
+
+// Register extensions one-by-one, skipping any already claimed by Obsidian core
+// or another plugin.  Newer Obsidian versions natively support formats (e.g. avif)
+// that we previously had to handle ourselves; a bulk registerExtensions() call
+// throws on the first conflict and aborts onload(), so we catch individually.
+function safeRegisterExtensions(
+	plugin: ViewPlusPlugin,
+	exts: string[],
+	viewType: string
+): void {
+	for (const ext of exts) {
+		try {
+			plugin.registerExtensions([ext], viewType);
+		} catch {
+			console.warn(`View Plus: skipping extension "${ext}" — already registered`);
+		}
+	}
 }
 
 // Check if the last segment (filename) starts with "."
