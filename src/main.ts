@@ -35,6 +35,8 @@ export default class ViewPlusPlugin extends Plugin {
 		| InternalFileSystemAdapter["reconcileDeletion"]
 		| undefined;
 	private discoveryController: AbortController | undefined;
+	// Compiled once and reused across all exclude-pattern checks in this session.
+	private compiledExcludePatterns: CompiledPattern[] = [];
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -136,7 +138,7 @@ export default class ViewPlusPlugin extends Plugin {
 			if (
 				plugin.settings.showHiddenFiles &&
 				isDotName(normalizedPath) &&
-				!isExcluded(normalizedPath, plugin.settings.excludePatterns)
+				!isExcluded(normalizedPath, plugin.compiledExcludePatterns)
 			) {
 				try {
 					await this.reconcileFile(normalizedPath, isFolder);
@@ -171,10 +173,15 @@ export default class ViewPlusPlugin extends Plugin {
 		relPath: string,
 		signal: AbortSignal,
 		depth = 0,
-		inSymlinkedTree = false
+		inSymlinkedTree = false,
+		compiled?: CompiledPattern[]
 	): Promise<void> {
 		// Depth limit guards against circular symlinks.
 		if (depth > 25 || signal.aborted) return;
+
+		// Reuse already-compiled patterns; the root call passes undefined so we
+		// fall back to the instance cache compiled at load/save time.
+		const patterns = compiled ?? this.compiledExcludePatterns;
 
 		const adapter = this.app.vault.adapter as unknown as InternalFileSystemAdapter;
 		const basePath = adapter.getBasePath();
@@ -210,7 +217,7 @@ export default class ViewPlusPlugin extends Plugin {
 				}
 			}
 
-			if (isExcluded(childRelPath, this.settings.excludePatterns)) return;
+			if (isExcluded(childRelPath, patterns)) return;
 
 			// Register when:
 			//   - inside a symlinked subtree (Obsidian never scanned it), or
@@ -236,13 +243,13 @@ export default class ViewPlusPlugin extends Plugin {
 		// Regular subdirs: recurse at same depth, propagate inSymlinkedTree flag.
 		for (const dir of regularDirs) {
 			if (signal.aborted) return;
-			await this.discoverHiddenFiles(dir, signal, depth, inSymlinkedTree);
+			await this.discoverHiddenFiles(dir, signal, depth, inSymlinkedTree, patterns);
 		}
 
 		// Symlinked dirs: increment depth to track nesting, mark tree as symlinked.
 		for (const dir of symlinkDirs) {
 			if (signal.aborted) return;
-			await this.discoverHiddenFiles(dir, signal, depth + 1, true);
+			await this.discoverHiddenFiles(dir, signal, depth + 1, true, patterns);
 		}
 	}
 
@@ -265,10 +272,12 @@ export default class ViewPlusPlugin extends Plugin {
 		if (!Array.isArray(this.settings.excludePatterns)) {
 			this.settings.excludePatterns = DEFAULT_SETTINGS.excludePatterns;
 		}
+		this.compiledExcludePatterns = compilePatterns(this.settings.excludePatterns);
 	}
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+		this.compiledExcludePatterns = compilePatterns(this.settings.excludePatterns);
 	}
 }
 
@@ -302,17 +311,36 @@ function isDotName(normalizedPath: string): boolean {
 	return name.startsWith(".") && name !== "." && name !== "..";
 }
 
+// A glob pattern compiled to a RegExp, ready for repeated matching.
+interface CompiledPattern {
+	negate: boolean;
+	re: RegExp;
+	// When false the pattern has no slash and matches against each path segment
+	// individually (gitignore basename semantics).
+	anchored: boolean;
+}
+
+// Compile raw glob strings to CompiledPattern once per discovery run.
+function compilePatterns(rawPatterns: string[]): CompiledPattern[] {
+	return rawPatterns.map((raw) => {
+		const negate = raw.startsWith("!");
+		const pattern = negate ? raw.slice(1) : raw;
+		const anchored = pattern.includes("/");
+		const re = new RegExp(`^${globToRegexSrc(pattern)}$`);
+		return { negate, re, anchored };
+	});
+}
+
 // Supports "!" prefix for negation (like .gitignore).
 // Patterns are evaluated in order: last match wins.
 // Example: [".git/**", "!.git/config"] → exclude all of .git except config.
-function isExcluded(normalizedPath: string, patterns: string[]): boolean {
+function isExcluded(normalizedPath: string, patterns: CompiledPattern[]): boolean {
 	let excluded = false;
-	for (const pattern of patterns) {
-		if (pattern.startsWith("!")) {
-			if (matchesPattern(normalizedPath, pattern.slice(1))) excluded = false;
-		} else {
-			if (matchesPattern(normalizedPath, pattern)) excluded = true;
-		}
+	for (const { negate, re, anchored } of patterns) {
+		const matches = anchored
+			? re.test(normalizedPath)
+			: normalizedPath.split("/").some((seg) => re.test(seg));
+		if (matches) excluded = !negate;
 	}
 	return excluded;
 }
@@ -330,18 +358,4 @@ function globToRegexSrc(pattern: string): string {
 		.replace(/\x00\//g, "(?:[^/]+/)*")     // **/ → zero-or-more segments prefix
 		.replace(/\/\x00/g, "(?:/.*)?")        // /** → optional subtree suffix
 		.replace(/\x00/g, ".*");               // bare ** → anything
-}
-
-function matchesPattern(path: string, pattern: string): boolean {
-	const hasSlash = pattern.includes("/");
-
-	if (hasSlash) {
-		// Anchored to vault root; /** also matches the directory entry itself.
-		return new RegExp(`^${globToRegexSrc(pattern)}$`).test(path);
-	}
-
-	// No slash → gitignore semantics: match against each path segment.
-	// e.g. "*.log" matches "foo.log" and "src/foo.log"
-	const re = new RegExp(`^${globToRegexSrc(pattern)}$`);
-	return path.split("/").some((seg) => re.test(seg));
 }

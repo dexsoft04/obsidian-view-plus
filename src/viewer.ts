@@ -1,4 +1,4 @@
-import { App, FileView, MarkdownRenderer, TFile, TextFileView, WorkspaceLeaf } from "obsidian";
+import { App, FileView, MarkdownRenderer, Notice, TFile, TextFileView, WorkspaceLeaf } from "obsidian";
 import { join } from "path";
 
 export const FILE_VIEWER_VIEW_TYPE = "view-plus-file-viewer";
@@ -25,7 +25,10 @@ export function openWithSystemApp(app: App, file: TFile): void {
 	// @ts-ignore – electron is available in the Obsidian desktop environment
 	const { shell } = require("electron");
 	shell.openPath(absPath).then((err: string) => {
-		if (err) console.error("View Plus: openPath failed", err);
+		if (err) {
+			console.error("View Plus: openPath failed", err);
+			new Notice(`View Plus: could not open file — ${err}`);
+		}
 	});
 }
 
@@ -63,6 +66,11 @@ export class FileViewerView extends TextFileView {
 		this.data = data;
 		this.renderContent(data).catch((e) => {
 			console.error("View Plus: renderContent failed", e);
+			this.contentEl.empty();
+			this.contentEl.createEl("p", {
+				cls: "view-plus-too-large",
+				text: `Render error: ${e instanceof Error ? e.message : String(e)}`,
+			});
 		});
 	}
 
@@ -82,7 +90,9 @@ export class FileViewerView extends TextFileView {
 
 		// CSV / TSV → render as a scrollable table (table-wrap handles its own layout)
 		if (ext === "csv" || ext === "tsv") {
-			renderCsvTable(this.contentEl, content, ext === "tsv" ? "\t" : ",");
+			// Strip UTF-8 BOM that Excel commonly prepends to CSV exports.
+			const normalized = content.startsWith("\uFEFF") ? content.slice(1) : content;
+			renderCsvTable(this.contentEl, normalized, ext === "tsv" ? "\t" : ",");
 			return;
 		}
 
@@ -209,7 +219,9 @@ function renderCsvTable(
 	content: string,
 	delimiter: string
 ): void {
-	const rows = parseCsv(content, delimiter);
+	// +1 to detect truncation: if we get MAX_TABLE_ROWS+1 data rows back the
+	// file has more rows than we want to show.
+	const { rows, truncated } = parseCsv(content, delimiter, MAX_TABLE_ROWS + 1);
 	if (rows.length === 0) {
 		containerEl.createEl("p", {
 			text: "Empty file.",
@@ -218,7 +230,6 @@ function renderCsvTable(
 		return;
 	}
 
-	const truncated = rows.length > MAX_TABLE_ROWS + 1;
 	const displayRows = truncated ? rows.slice(0, MAX_TABLE_ROWS + 1) : rows;
 	const colCount = Math.max(...displayRows.map((r) => r.length));
 
@@ -243,18 +254,26 @@ function renderCsvTable(
 	if (truncated) {
 		outer.createEl("p", {
 			cls: "view-plus-table-truncated",
-			text: `Showing first ${MAX_TABLE_ROWS.toLocaleString()} of ${(rows.length - 1).toLocaleString()} rows.`,
+			text: `Showing first ${MAX_TABLE_ROWS.toLocaleString()} rows (file has more).`,
 		});
 	}
 }
 
 // RFC-4180 CSV parser: handles quoted fields and "" escaping.
-function parseCsv(content: string, delimiter: string): string[][] {
+// maxRows: stop collecting data rows (excluding header) once this limit is
+// reached — avoids loading the entire file into memory for large CSVs.
+// Returns { rows, truncated } where truncated=true means the file had more rows.
+function parseCsv(
+	content: string,
+	delimiter: string,
+	maxRows = Infinity
+): { rows: string[][]; truncated: boolean } {
 	const rows: string[][] = [];
 	let current: string[] = [];
 	let field = "";
 	let inQuotes = false;
 	let i = 0;
+	let truncated = false;
 
 	while (i < content.length) {
 		const ch = content[i];
@@ -280,6 +299,11 @@ function parseCsv(content: string, delimiter: string): string[][] {
 			field = "";
 			rows.push(current);
 			current = [];
+			// rows[0] is the header; data rows start at index 1.
+			if (rows.length > maxRows) {
+				truncated = true;
+				return { rows: rows.slice(0, maxRows), truncated };
+			}
 		} else if (ch !== "\r") {
 			field += ch;
 		}
@@ -293,7 +317,7 @@ function parseCsv(content: string, delimiter: string): string[][] {
 		if (current.some((f) => f !== "")) rows.push(current);
 	}
 
-	return rows;
+	return { rows, truncated };
 }
 
 // ─── Extension → syntax highlight language ──────────────────────────────────

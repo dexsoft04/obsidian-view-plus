@@ -22,6 +22,10 @@ export class ViewPlusSettingTab extends PluginSettingTab {
 		this.plugin = plugin;
 	}
 
+	hide(): void {
+		clearTimeout(this.excludeDebounceTimer);
+	}
+
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();

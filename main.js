@@ -43,6 +43,9 @@ var ViewPlusSettingTab = class extends import_obsidian.PluginSettingTab {
     super(app, plugin);
     this.plugin = plugin;
   }
+  hide() {
+    clearTimeout(this.excludeDebounceTimer);
+  }
   display() {
     const { containerEl } = this;
     containerEl.empty();
@@ -110,7 +113,10 @@ function openWithSystemApp(app, file) {
   const absPath = (0, import_path.join)(basePath, file.path);
   const { shell } = require("electron");
   shell.openPath(absPath).then((err) => {
-    if (err) console.error("View Plus: openPath failed", err);
+    if (err) {
+      console.error("View Plus: openPath failed", err);
+      new import_obsidian2.Notice(`View Plus: could not open file \u2014 ${err}`);
+    }
   });
 }
 var FileViewerView = class extends import_obsidian2.TextFileView {
@@ -141,6 +147,11 @@ var FileViewerView = class extends import_obsidian2.TextFileView {
     this.data = data;
     this.renderContent(data).catch((e) => {
       console.error("View Plus: renderContent failed", e);
+      this.contentEl.empty();
+      this.contentEl.createEl("p", {
+        cls: "view-plus-too-large",
+        text: `Render error: ${e instanceof Error ? e.message : String(e)}`
+      });
     });
   }
   clear() {
@@ -156,7 +167,8 @@ var FileViewerView = class extends import_obsidian2.TextFileView {
     this.contentEl.removeClass("view-plus-viewer");
     const ext = (_c = (_b = (_a = this.file) == null ? void 0 : _a.extension) == null ? void 0 : _b.toLowerCase()) != null ? _c : "";
     if (ext === "csv" || ext === "tsv") {
-      renderCsvTable(this.contentEl, content, ext === "tsv" ? "	" : ",");
+      const normalized = content.startsWith("\uFEFF") ? content.slice(1) : content;
+      renderCsvTable(this.contentEl, normalized, ext === "tsv" ? "	" : ",");
       return;
     }
     this.contentEl.addClass("view-plus-viewer");
@@ -262,7 +274,7 @@ function renderCannotPreview(container) {
 }
 function renderCsvTable(containerEl, content, delimiter) {
   var _a, _b;
-  const rows = parseCsv(content, delimiter);
+  const { rows, truncated } = parseCsv(content, delimiter, MAX_TABLE_ROWS + 1);
   if (rows.length === 0) {
     containerEl.createEl("p", {
       text: "Empty file.",
@@ -270,7 +282,6 @@ function renderCsvTable(containerEl, content, delimiter) {
     });
     return;
   }
-  const truncated = rows.length > MAX_TABLE_ROWS + 1;
   const displayRows = truncated ? rows.slice(0, MAX_TABLE_ROWS + 1) : rows;
   const colCount = Math.max(...displayRows.map((r) => r.length));
   const outer = containerEl.createDiv({ cls: "view-plus-csv-container" });
@@ -291,16 +302,17 @@ function renderCsvTable(containerEl, content, delimiter) {
   if (truncated) {
     outer.createEl("p", {
       cls: "view-plus-table-truncated",
-      text: `Showing first ${MAX_TABLE_ROWS.toLocaleString()} of ${(rows.length - 1).toLocaleString()} rows.`
+      text: `Showing first ${MAX_TABLE_ROWS.toLocaleString()} rows (file has more).`
     });
   }
 }
-function parseCsv(content, delimiter) {
+function parseCsv(content, delimiter, maxRows = Infinity) {
   const rows = [];
   let current = [];
   let field = "";
   let inQuotes = false;
   let i = 0;
+  let truncated = false;
   while (i < content.length) {
     const ch = content[i];
     if (inQuotes) {
@@ -324,6 +336,10 @@ function parseCsv(content, delimiter) {
       field = "";
       rows.push(current);
       current = [];
+      if (rows.length > maxRows) {
+        truncated = true;
+        return { rows: rows.slice(0, maxRows), truncated };
+      }
     } else if (ch !== "\r") {
       field += ch;
     }
@@ -333,7 +349,7 @@ function parseCsv(content, delimiter) {
     current.push(field);
     if (current.some((f) => f !== "")) rows.push(current);
   }
-  return rows;
+  return { rows, truncated };
 }
 var TEXT_EXTENSIONS = [
   // Web / scripting
@@ -457,6 +473,8 @@ var ViewPlusPlugin = class extends import_obsidian3.Plugin {
   constructor() {
     super(...arguments);
     this.patchApplied = false;
+    // Compiled once and reused across all exclude-pattern checks in this session.
+    this.compiledExcludePatterns = [];
   }
   async onload() {
     await this.loadSettings();
@@ -521,7 +539,7 @@ var ViewPlusPlugin = class extends import_obsidian3.Plugin {
     this.originalReconcileDeletion = adapter.reconcileDeletion.bind(adapter);
     const plugin = this;
     adapter.reconcileDeletion = async function(normalizedPath, isFolder) {
-      if (plugin.settings.showHiddenFiles && isDotName(normalizedPath) && !isExcluded(normalizedPath, plugin.settings.excludePatterns)) {
+      if (plugin.settings.showHiddenFiles && isDotName(normalizedPath) && !isExcluded(normalizedPath, plugin.compiledExcludePatterns)) {
         try {
           await this.reconcileFile(normalizedPath, isFolder);
         } catch (e) {
@@ -546,8 +564,9 @@ var ViewPlusPlugin = class extends import_obsidian3.Plugin {
       console.error("View Plus: discoverHiddenFiles failed", e);
     });
   }
-  async discoverHiddenFiles(relPath, signal, depth = 0, inSymlinkedTree = false) {
+  async discoverHiddenFiles(relPath, signal, depth = 0, inSymlinkedTree = false, compiled) {
     if (depth > 25 || signal.aborted) return;
+    const patterns = compiled != null ? compiled : this.compiledExcludePatterns;
     const adapter = this.app.vault.adapter;
     const basePath = adapter.getBasePath();
     const absPath = relPath ? (0, import_path2.join)(basePath, relPath) : basePath;
@@ -572,7 +591,7 @@ var ViewPlusPlugin = class extends import_obsidian3.Plugin {
           return;
         }
       }
-      if (isExcluded(childRelPath, this.settings.excludePatterns)) return;
+      if (isExcluded(childRelPath, patterns)) return;
       if (inSymlinkedTree || isSymlink || entry.name.startsWith(".")) {
         try {
           await adapter.reconcileFile(childRelPath, isDir);
@@ -589,11 +608,11 @@ var ViewPlusPlugin = class extends import_obsidian3.Plugin {
     });
     for (const dir of regularDirs) {
       if (signal.aborted) return;
-      await this.discoverHiddenFiles(dir, signal, depth, inSymlinkedTree);
+      await this.discoverHiddenFiles(dir, signal, depth, inSymlinkedTree, patterns);
     }
     for (const dir of symlinkDirs) {
       if (signal.aborted) return;
-      await this.discoverHiddenFiles(dir, signal, depth + 1, true);
+      await this.discoverHiddenFiles(dir, signal, depth + 1, true, patterns);
     }
   }
   removeHiddenFilesPatch() {
@@ -611,9 +630,11 @@ var ViewPlusPlugin = class extends import_obsidian3.Plugin {
     if (!Array.isArray(this.settings.excludePatterns)) {
       this.settings.excludePatterns = DEFAULT_SETTINGS.excludePatterns;
     }
+    this.compiledExcludePatterns = compilePatterns(this.settings.excludePatterns);
   }
   async saveSettings() {
     await this.saveData(this.settings);
+    this.compiledExcludePatterns = compilePatterns(this.settings.excludePatterns);
   }
 };
 var DISCOVERY_CONCURRENCY = 20;
@@ -634,25 +655,23 @@ function isDotName(normalizedPath) {
   const name = segments[segments.length - 1];
   return name.startsWith(".") && name !== "." && name !== "..";
 }
+function compilePatterns(rawPatterns) {
+  return rawPatterns.map((raw) => {
+    const negate = raw.startsWith("!");
+    const pattern = negate ? raw.slice(1) : raw;
+    const anchored = pattern.includes("/");
+    const re = new RegExp(`^${globToRegexSrc(pattern)}$`);
+    return { negate, re, anchored };
+  });
+}
 function isExcluded(normalizedPath, patterns) {
   let excluded = false;
-  for (const pattern of patterns) {
-    if (pattern.startsWith("!")) {
-      if (matchesPattern(normalizedPath, pattern.slice(1))) excluded = false;
-    } else {
-      if (matchesPattern(normalizedPath, pattern)) excluded = true;
-    }
+  for (const { negate, re, anchored } of patterns) {
+    const matches = anchored ? re.test(normalizedPath) : normalizedPath.split("/").some((seg) => re.test(seg));
+    if (matches) excluded = !negate;
   }
   return excluded;
 }
 function globToRegexSrc(pattern) {
   return pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*/g, "\0").replace(/\*/g, "[^/]*").replace(/\x00\//g, "(?:[^/]+/)*").replace(/\/\x00/g, "(?:/.*)?").replace(/\x00/g, ".*");
-}
-function matchesPattern(path, pattern) {
-  const hasSlash = pattern.includes("/");
-  if (hasSlash) {
-    return new RegExp(`^${globToRegexSrc(pattern)}$`).test(path);
-  }
-  const re = new RegExp(`^${globToRegexSrc(pattern)}$`);
-  return path.split("/").some((seg) => re.test(seg));
 }
