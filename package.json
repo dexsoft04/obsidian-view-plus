@@ -1,7 +1,7 @@
 {
 	"name": "obsidian-view-plus",
 	"version": "1.0.0",
-	"description": "Show hidden dotfiles/dotfolders and non-Markdown file types in Obsidian",
+	"description": "Open non-Markdown files in dedicated views with syntax highlighting and system app launch.",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
@@ -13,6 +13,16 @@
 	"author": "",
 	"license": "MIT",
 	"devDependencies": {
+		"@codemirror/lang-cpp": "^6.0.3",
+		"@codemirror/lang-css": "^6.3.1",
+		"@codemirror/lang-html": "^6.4.11",
+		"@codemirror/lang-javascript": "^6.2.5",
+		"@codemirror/lang-json": "^6.0.2",
+		"@codemirror/lang-python": "^6.2.1",
+		"@codemirror/lang-yaml": "^6.1.3",
+		"@codemirror/language": "^6.12.3",
+		"@codemirror/state": "^6.5.0",
+		"@codemirror/view": "^6.38.6",
 		"@types/node": "^18.0.0",
 		"builtin-modules": "3.3.0",
 		"esbuild": "0.25.5",

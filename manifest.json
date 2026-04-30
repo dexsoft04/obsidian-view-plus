@@ -3,7 +3,7 @@
 	"name": "View Plus",
 	"version": "1.0.0",
 	"minAppVersion": "1.4.0",
-	"description": "Show hidden dotfiles/dotfolders and non-Markdown file types in the Obsidian file explorer.",
+	"description": "Open non-Markdown files in dedicated views with syntax highlighting and system app launch.",
 	"author": "dexsoft",
 	"isDesktopOnly": true
 }
