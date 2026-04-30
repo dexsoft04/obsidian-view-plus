@@ -15,12 +15,19 @@ import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
 import { python } from "@codemirror/lang-python";
 import { yaml } from "@codemirror/lang-yaml";
-import { join } from "path";
+import { canFormatWithViewPlus, formatWithViewPlus } from "./formatter";
+import {
+	copyAbsolutePath,
+	copyVaultRelativePath,
+	formatBytesAsMb,
+	getMaxTextFileSizeBytes,
+	openWithSystemApp,
+	revealInSystemExplorer,
+} from "./file-utils";
+import type { ViewPlusSettings } from "./settings";
 
 export const FILE_VIEWER_VIEW_TYPE = "view-plus-file-viewer";
 export const MEDIA_VIEWER_VIEW_TYPE = "view-plus-media-viewer";
-
-const MAX_FILE_SIZE = 5 * 1024 * 1024;
 
 const IMAGE_EXTS = new Set(["avif", "ico", "tiff", "tif"]);
 const AUDIO_EXTS = new Set(["aac", "opus"]);
@@ -31,25 +38,8 @@ const CPP_EXTS = new Set(["c", "h", "cpp", "hpp"]);
 const CSS_EXTS = new Set(["css", "scss", "sass", "less"]);
 const HTML_EXTS = new Set(["html", "htm"]);
 const PYTHON_EXTS = new Set(["py"]);
-const JSON_EXTS = new Set(["json"]);
+const JSON_EXTS = new Set(["json", "jsonl", "ndjson"]);
 const YAML_EXTS = new Set(["yaml", "yml"]);
-
-export const MEDIA_EXTENSIONS = [...IMAGE_EXTS, ...AUDIO_EXTS, ...VIDEO_EXTS];
-
-export const TEXT_EXTENSIONS = [
-	"js", "mjs", "cjs", "ts", "jsx", "tsx",
-	"py", "rb", "php", "go", "rs",
-	"c", "h", "cpp", "hpp", "java", "kt", "swift",
-	"json", "yaml", "yml", "toml",
-	"ini", "cfg", "conf", "properties", "env",
-	"gitignore", "gitconfig", "gitattributes", "editorconfig",
-	"dockerignore", "lock",
-	"css", "scss", "sass", "less",
-	"html", "htm", "xml",
-	"sh", "bash", "zsh", "fish", "ps1",
-	"sql", "csv", "tsv",
-	"txt", "log", "diff", "patch",
-];
 
 const BASE_EDITOR_EXTENSIONS: Extension[] = [
 	lineNumbers(),
@@ -79,32 +69,40 @@ const BASE_EDITOR_EXTENSIONS: Extension[] = [
 	}),
 ];
 
-export function openWithSystemApp(app: App, file: TFile): void {
-	const adapter = app.vault.adapter as { getBasePath?: () => string };
-	if (typeof adapter.getBasePath !== "function") {
-		new Notice("View Plus: system app opening is only available on desktop.");
-		return;
-	}
-	const absPath = join(adapter.getBasePath(), file.path);
-	// @ts-ignore electron is available in the Obsidian desktop environment
-	const { shell } = require("electron");
-	shell.openPath(absPath).then((err: string) => {
-		if (err) {
-			console.error("View Plus: openPath failed", err);
-			new Notice(`View Plus: could not open file - ${err}`);
-		}
+export interface ViewPlusViewContext {
+	getSettings(): ViewPlusSettings;
+}
+
+export async function openInViewPlusText(
+	app: App,
+	file: TFile,
+	leaf?: WorkspaceLeaf
+): Promise<FileViewerView | null> {
+	const targetLeaf = leaf ?? app.workspace.getLeaf(true);
+	await targetLeaf.setViewState({
+		type: FILE_VIEWER_VIEW_TYPE,
+		active: true,
+		state: { file: file.path },
 	});
+	await targetLeaf.loadIfDeferred();
+	app.workspace.setActiveLeaf(targetLeaf, { focus: true });
+	return targetLeaf.view instanceof FileViewerView ? targetLeaf.view : null;
 }
 
 export class FileViewerView extends TextFileView {
 	private editorView: EditorView | null = null;
 
-	constructor(leaf: WorkspaceLeaf) {
+	constructor(
+		leaf: WorkspaceLeaf,
+		private readonly context: ViewPlusViewContext
+	) {
 		super(leaf);
-		this.addAction("external-link", "Open with system app", () => {
-			if (this.file) {
-				openWithSystemApp(this.app, this.file);
-			}
+		this.addCommonActions();
+		this.addAction("wand-2", "Format file", () => {
+			void this.formatCurrentFile();
+		});
+		this.addAction("refresh-cw", "Reload from disk", () => {
+			void this.reloadFromDisk();
 		});
 	}
 
@@ -124,6 +122,10 @@ export class FileViewerView extends TextFileView {
 		return this.editorView?.state.doc.toString() ?? this.data;
 	}
 
+	async onLoadFile(file: TFile): Promise<void> {
+		await super.onLoadFile(file);
+	}
+
 	setViewData(data: string, clear: boolean): void {
 		if (clear) {
 			this.clear();
@@ -131,12 +133,12 @@ export class FileViewerView extends TextFileView {
 		this.data = data;
 		this.contentEl.empty();
 		this.contentEl.removeClass("view-plus-media");
+		this.contentEl.removeClass("view-plus-viewer");
 
-		if (data.length > MAX_FILE_SIZE) {
-			this.contentEl.createEl("p", {
-				cls: "view-plus-too-large",
-				text: `File too large to open in editor (${(data.length / (1024 * 1024)).toFixed(1)} MB). Use the system app action instead.`,
-			});
+		const maxBytes = getMaxTextFileSizeBytes(this.context.getSettings());
+		const fileSize = this.file?.stat.size ?? new TextEncoder().encode(data).length;
+		if (fileSize > maxBytes) {
+			renderTextFileTooLarge(this.contentEl, this.app, this.file, fileSize, maxBytes);
 			return;
 		}
 
@@ -166,16 +168,77 @@ export class FileViewerView extends TextFileView {
 		this.contentEl.empty();
 		this.contentEl.removeClass("view-plus-viewer");
 	}
-}
 
-export class MediaView extends FileView {
-	constructor(leaf: WorkspaceLeaf) {
-		super(leaf);
+	async reloadFromDisk(): Promise<void> {
+		if (!this.file) return;
+		await this.onLoadFile(this.file);
+		new Notice("View Plus: reloaded file from disk.");
+	}
+
+	async formatCurrentFile(): Promise<void> {
+		if (!this.file || !this.editorView) return;
+		if (!canFormatWithViewPlus(this.file)) {
+			new Notice("View Plus: formatting is not available for this file type.");
+			return;
+		}
+
+		try {
+			const currentContent = this.editorView.state.doc.toString();
+			const formattedContent = await formatWithViewPlus(this.file, currentContent);
+			if (formattedContent === currentContent) {
+				new Notice("View Plus: file is already formatted.");
+				return;
+			}
+
+			this.editorView.dispatch({
+				changes: {
+					from: 0,
+					to: this.editorView.state.doc.length,
+					insert: formattedContent,
+				},
+			});
+			new Notice("View Plus: formatted file.");
+		} catch (error) {
+			console.error("View Plus: format failed", {
+				path: this.file.path,
+				error,
+			});
+			const message = error instanceof Error ? error.message : "Could not format this file.";
+			new Notice(`View Plus: ${message}`);
+		}
+	}
+
+	private addCommonActions(): void {
 		this.addAction("external-link", "Open with system app", () => {
 			if (this.file) {
 				openWithSystemApp(this.app, this.file);
 			}
 		});
+		this.addAction("folder-open", "Reveal in system explorer", () => {
+			if (this.file) {
+				revealInSystemExplorer(this.app, this.file);
+			}
+		});
+		this.addAction("copy", "Copy vault-relative path", () => {
+			if (this.file) {
+				copyVaultRelativePath(this.file);
+			}
+		});
+		this.addAction("files", "Copy absolute path", () => {
+			if (this.file) {
+				copyAbsolutePath(this.app, this.file);
+			}
+		});
+	}
+}
+
+export class MediaView extends FileView {
+	constructor(
+		leaf: WorkspaceLeaf,
+		_context: ViewPlusViewContext
+	) {
+		super(leaf);
+		this.addCommonActions();
 	}
 
 	getViewType(): string {
@@ -202,7 +265,7 @@ export class MediaView extends FileView {
 			getResourcePath?: (path: string) => string;
 		};
 		if (typeof adapter.getResourcePath !== "function") {
-			renderCannotPreview(this.contentEl);
+			renderCannotPreview(this.contentEl, this.app, file);
 			return;
 		}
 		const resourcePath = adapter.getResourcePath(file.path);
@@ -215,7 +278,7 @@ export class MediaView extends FileView {
 				attr: { src: resourcePath },
 				cls: "view-plus-media-image",
 			}) as HTMLImageElement;
-			img.addEventListener("error", () => renderCannotPreview(wrap));
+			img.addEventListener("error", () => renderCannotPreview(wrap, this.app, file));
 			return;
 		}
 
@@ -232,7 +295,7 @@ export class MediaView extends FileView {
 			}) as HTMLAudioElement;
 			audio.src = resourcePath;
 			audio.controls = true;
-			audio.addEventListener("error", () => renderCannotPreview(wrap));
+			audio.addEventListener("error", () => renderCannotPreview(wrap, this.app, file));
 			return;
 		}
 
@@ -245,24 +308,106 @@ export class MediaView extends FileView {
 			}) as HTMLVideoElement;
 			video.src = resourcePath;
 			video.controls = true;
-			video.addEventListener("error", () => renderCannotPreview(wrap));
+			video.addEventListener("error", () => renderCannotPreview(wrap, this.app, file));
 			return;
 		}
 
-		renderCannotPreview(this.contentEl);
+		renderCannotPreview(this.contentEl, this.app, file);
 	}
 
 	async onUnloadFile(_file: TFile): Promise<void> {
 		this.contentEl.empty();
 	}
+
+	private addCommonActions(): void {
+		this.addAction("external-link", "Open with system app", () => {
+			if (this.file) {
+				openWithSystemApp(this.app, this.file);
+			}
+		});
+		this.addAction("folder-open", "Reveal in system explorer", () => {
+			if (this.file) {
+				revealInSystemExplorer(this.app, this.file);
+			}
+		});
+		this.addAction("copy", "Copy vault-relative path", () => {
+			if (this.file) {
+				copyVaultRelativePath(this.file);
+			}
+		});
+		this.addAction("files", "Copy absolute path", () => {
+			if (this.file) {
+				copyAbsolutePath(this.app, this.file);
+			}
+		});
+	}
 }
 
-function renderCannotPreview(container: HTMLElement): void {
+function renderTextFileTooLarge(
+	container: HTMLElement,
+	app: App,
+	file: TFile | null,
+	fileSize: number,
+	maxBytes: number
+): void {
 	container.empty();
-	container.createEl("p", {
-		cls: "view-plus-cannot-preview",
-		text: 'Cannot preview this file in Obsidian. Use the "Open with system app" action instead.',
+	const panel = container.createDiv({ cls: "view-plus-message-card" });
+	panel.createEl("h3", {
+		text: "Cannot open this file as text",
+		cls: "view-plus-message-title",
 	});
+	panel.createEl("p", {
+		cls: "view-plus-message-body",
+		text: `This file is ${formatBytesAsMb(fileSize)} MB, which exceeds the View Plus text limit of ${formatBytesAsMb(maxBytes)} MB.`,
+	});
+	panel.createEl("p", {
+		cls: "view-plus-message-body",
+		text: "Recommended next step: open it with the system app, or reveal it in the system explorer.",
+	});
+	if (file) {
+		renderActionButtons(panel, app, file, false);
+	}
+}
+
+function renderCannotPreview(container: HTMLElement, app: App, file: TFile): void {
+	container.empty();
+	const panel = container.createDiv({ cls: "view-plus-message-card" });
+	panel.createEl("h3", {
+		cls: "view-plus-message-title",
+		text: "Cannot preview this file in Obsidian",
+	});
+	panel.createEl("p", {
+		cls: "view-plus-message-body",
+		text: "Recommended next step: open it with the system app, reveal it in the system explorer, or copy its path for another tool.",
+	});
+	renderActionButtons(panel, app, file, true);
+}
+
+function renderActionButtons(
+	container: HTMLElement,
+	app: App,
+	file: TFile,
+	includeCopyActions: boolean
+): void {
+	const actionRow = container.createDiv({ cls: "view-plus-message-actions" });
+	createActionButton(actionRow, "Open with system app", () => openWithSystemApp(app, file));
+	createActionButton(actionRow, "Reveal in system explorer", () => revealInSystemExplorer(app, file));
+	if (includeCopyActions) {
+		createActionButton(actionRow, "Copy vault-relative path", () => copyVaultRelativePath(file));
+		createActionButton(actionRow, "Copy absolute path", () => copyAbsolutePath(app, file));
+	}
+}
+
+function createActionButton(
+	container: HTMLElement,
+	label: string,
+	onClick: () => void
+): void {
+	const button = container.createEl("button", {
+		cls: "mod-cta view-plus-action-button",
+		text: label,
+	});
+	button.addEventListener("click", onClick);
 }
 
 function getLanguageExtensions(file: TFile | null): Extension[] {
