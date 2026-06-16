@@ -84,3 +84,7 @@
 .view-plus-action-button {
 	white-space: nowrap;
 }
+
+.nav-file-title.is-unsupported.view-plus-extensionless-text-file {
+	display: flex !important;
+}

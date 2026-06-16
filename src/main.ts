@@ -2,6 +2,7 @@ import { Menu, Notice, Plugin, PluginSettingTab, Setting, TFile } from "obsidian
 import {
 	copyAbsolutePath,
 	copyVaultRelativePath,
+	getMaxTextFileSizeBytes,
 	isNonMarkdownFile,
 	MEDIA_EXTENSIONS,
 	openWithSystemApp,
@@ -23,6 +24,7 @@ import {
 export default class ViewPlusPlugin extends Plugin {
 	settings: ViewPlusSettings = DEFAULT_SETTINGS;
 	classifier!: ViewPlusFileClassifier;
+	private fileExplorerObserver: MutationObserver | null = null;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -42,6 +44,8 @@ export default class ViewPlusPlugin extends Plugin {
 		this.registerCommands();
 		this.registerMenuHandlers();
 		this.registerVaultCacheHandlers();
+		this.registerExtensionlessTextOpenHandler();
+		this.registerExtensionlessTextFileExplorerHandler();
 		this.registerDoubleClickHandler();
 	}
 
@@ -53,6 +57,7 @@ export default class ViewPlusPlugin extends Plugin {
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
 		this.classifier.clear();
+		this.updateExtensionlessTextFileExplorerItems();
 	}
 
 	async openFileInTextView(file: TFile): Promise<void> {
@@ -200,9 +205,18 @@ export default class ViewPlusPlugin extends Plugin {
 
 	private registerVaultCacheHandlers(): void {
 		this.registerEvent(
+			this.app.vault.on("create", (file) => {
+				if (file instanceof TFile) {
+					this.classifier.invalidate(file.path);
+					this.scheduleExtensionlessTextFileExplorerUpdate();
+				}
+			})
+		);
+		this.registerEvent(
 			this.app.vault.on("modify", (file) => {
 				if (file instanceof TFile) {
 					this.classifier.invalidate(file.path);
+					this.scheduleExtensionlessTextFileExplorerUpdate();
 				}
 			})
 		);
@@ -210,6 +224,7 @@ export default class ViewPlusPlugin extends Plugin {
 			this.app.vault.on("delete", (file) => {
 				if (file instanceof TFile) {
 					this.classifier.invalidate(file.path);
+					this.scheduleExtensionlessTextFileExplorerUpdate();
 				}
 			})
 		);
@@ -218,9 +233,108 @@ export default class ViewPlusPlugin extends Plugin {
 				if (file instanceof TFile) {
 					this.classifier.invalidate(oldPath);
 					this.classifier.invalidate(file.path);
+					this.scheduleExtensionlessTextFileExplorerUpdate();
 				}
 			})
 		);
+	}
+
+	private registerExtensionlessTextOpenHandler(): void {
+		this.registerEvent(
+			this.app.workspace.on("file-open", (file) => {
+				if (!(file instanceof TFile)) return;
+				if (file.extension.length > 0) return;
+				void this.openExtensionlessTextFile(file);
+			})
+		);
+	}
+
+	private async openExtensionlessTextFile(file: TFile): Promise<void> {
+		if (file.stat.size > getMaxTextFileSizeBytes(this.settings)) {
+			return;
+		}
+
+		const activeLeaf = this.app.workspace.getLeaf(false);
+		if (activeLeaf.view instanceof FileViewerView && activeLeaf.view.file?.path === file.path) {
+			return;
+		}
+
+		const classification = await this.classifier.classify(file);
+		if (classification.kind !== "text" || !classification.textOpenEligible) {
+			return;
+		}
+
+		await openInViewPlusText(this.app, file, activeLeaf);
+	}
+
+	private registerExtensionlessTextFileExplorerHandler(): void {
+		this.updateExtensionlessTextFileExplorerItems();
+		this.fileExplorerObserver = new MutationObserver(() => {
+			this.updateExtensionlessTextFileExplorerItems();
+		});
+		this.fileExplorerObserver.observe(document.body, {
+			childList: true,
+			subtree: true,
+		});
+		this.register(() => {
+			this.fileExplorerObserver?.disconnect();
+			this.fileExplorerObserver = null;
+		});
+		this.registerDomEvent(
+			document,
+			"click",
+			(event: MouseEvent) => {
+				if (event.button !== 0) return;
+				const file = this.getExtensionlessFileFromNavEvent(event);
+				if (!file) return;
+				if (!this.canOpenExtensionlessTextFileSync(file)) return;
+
+				event.preventDefault();
+				event.stopPropagation();
+				void this.openExtensionlessTextFile(file);
+			},
+			{ capture: true }
+		);
+	}
+
+	private getExtensionlessFileFromNavEvent(event: MouseEvent): TFile | null {
+		const navTitle = (event.target as HTMLElement | null)?.closest<HTMLElement>(
+			".nav-file-title[data-path]"
+		);
+		const filePath = navTitle?.getAttribute("data-path");
+		if (!filePath) return null;
+
+		const file = this.app.vault.getFileByPath(filePath);
+		if (!(file instanceof TFile)) return null;
+		if (file.extension.length > 0) return null;
+		return file;
+	}
+
+	private canOpenExtensionlessTextFileSync(file: TFile): boolean {
+		if (file.stat.size > getMaxTextFileSizeBytes(this.settings)) {
+			return false;
+		}
+		const classification = this.classifier.peek(file);
+		return classification.kind === "text" && classification.textOpenEligible;
+	}
+
+	private scheduleExtensionlessTextFileExplorerUpdate(): void {
+		window.requestAnimationFrame(() => this.updateExtensionlessTextFileExplorerItems());
+	}
+
+	private updateExtensionlessTextFileExplorerItems(): void {
+		const navTitles = Array.from(document.querySelectorAll<HTMLElement>(
+			".nav-file-title.is-unsupported[data-path]"
+		));
+		for (const navTitle of navTitles) {
+			const filePath = navTitle.getAttribute("data-path");
+			const file = filePath ? this.app.vault.getFileByPath(filePath) : null;
+			if (file instanceof TFile && file.extension.length === 0 && this.canOpenExtensionlessTextFileSync(file)) {
+				navTitle.addClass("view-plus-extensionless-text-file");
+			} else {
+				navTitle.removeClass("view-plus-extensionless-text-file");
+			}
+		}
 	}
 
 	private registerDoubleClickHandler(): void {
