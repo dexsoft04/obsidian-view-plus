@@ -59,9 +59,14 @@ View Plus 是一个 Obsidian 桌面端插件，专注于三件事：
 
 文本/代码文件会用 CodeMirror 视图打开，提供：
 
-- 精简后的基础语法高亮
+- 常见文本、代码和配置文件语法高亮
 - 行号
 - 当前行高亮
+- 选中内容 / 光标所在词匹配高亮
+- 查找与替换面板（工具栏搜索按钮，`Ctrl/Cmd + F` 查找，`Ctrl/Cmd + H` 打开替换）
+- 键盘查找流转（`Enter` 下一个，`Shift + Enter` 上一个，`Ctrl/Cmd + Enter` 全选匹配，`Esc` 关闭）
+- 键盘替换流转（替换框内 `Enter` 替换下一个，`Alt + Enter` 全部替换）
+- 撤销 / 重做、缩进、括号匹配与自动闭合
 - 自动保存触发
 - 超过 **5 MB** 时的安全提示
 
@@ -69,10 +74,13 @@ View Plus 是一个 Obsidian 桌面端插件，专注于三件事：
 
 | 分类 | 扩展名 |
 | --- | --- |
-| Web / 脚本 | `js` `mjs` `cjs` `ts` `jsx` `tsx` `py` |
-| 系统语言 | `c` `h` `cpp` `hpp` |
-| 配置 / 数据 | `json` `yaml` `yml` |
-| 样式 / 标记 | `css` `scss` `sass` `less` `html` `htm` |
+| Web / 脚本 | `js` `mjs` `cjs` `ts` `jsx` `tsx` `py` `sh` `bash` `zsh` `fish` `ps1` |
+| 系统语言 | `c` `h` `cpp` `hpp` `go` `java` `kt` `rb` `rs` `swift` |
+| 配置 / 数据 | `json` `jsonl` `ndjson` `yaml` `yml` `toml` `ini` `cfg` `conf` `properties` `env` `sql` |
+| 样式 / 标记 | `css` `scss` `sass` `less` `html` `htm` `xml` |
+| 差异文件 | `diff` `patch` |
+
+同时按文件名识别 `Dockerfile`、`*.dockerfile`、`Makefile`、`Justfile`、`Procfile`、`go.mod`、`go.sum`、`CMakeLists.txt`、`.env*` 和常见点文件。
 
 其他仍会由插件接管的文本扩展名，会继续以纯文本方式打开和编辑，但不再额外加载对应语言高亮包。
 

@@ -181,6 +181,20 @@ export default class ViewPlusPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: "find-and-replace-in-view-plus",
+			name: "Find and replace in View Plus",
+			hotkeys: [{ modifiers: ["Mod"], key: "h" }],
+			checkCallback: (checking) => {
+				const activeView = this.app.workspace.getActiveViewOfType(FileViewerView);
+				if (!activeView?.file) return false;
+				if (!checking) {
+					activeView.openReplacePanel();
+				}
+				return true;
+			},
+		});
+
+		this.addCommand({
 			id: "format-file",
 			name: "Format file",
 			checkCallback: (checking) => {
